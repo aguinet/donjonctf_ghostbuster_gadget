@@ -1,0 +1,5 @@
+future==0.18.2
+lief==0.10.1
+miasm @ git+git://github.com/cea-sec/miasm@bd2e579f6633e4c6617cf972b559421f0343f6e5
+pydffi==0.6.3
+pyparsing==2.4.7
