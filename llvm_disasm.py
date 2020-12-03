@@ -8,16 +8,20 @@ class Instr:
         self.txt = txt
         self.raw = raw
     def __repr__(self):
-        return "%08X: %s" % (self.addr,self.txt)
+        return "%08X: %s" % (self.addr,b"\t".join(self.txt).decode("ascii"))
 
 class LLVMDisasm:
     def __init__(self, llvm_root):
         pydffi.dlopen(os.path.join(llvm_root, "lib", "libLLVM.so"))
         self.FFI=pydffi.FFI(includeDirs=[os.path.join(llvm_root, "include")])
         self.CU=self.FFI.cdef('''
-        #include <string.h>
         #include <llvm-c/Target.h>
         #include <llvm-c/Disassembler.h>
+
+        size_t disasm(LLVMDisasmContextRef Disasm, uint8_t const* In, size_t InLen, uint64_t Addr, char* Out, size_t OutLen)
+        {
+          return LLVMDisasmInstruction(Disasm, (uint8_t*)In, InLen, Addr, Out, OutLen);
+        }
         ''')
         self.CU.funcs.LLVMInitializeX86Disassembler()
         self.CU.funcs.LLVMInitializeX86Target()
@@ -29,28 +33,40 @@ class LLVMDisasm:
             raise RuntimeError("unable to create an LLVM disassembler engine")
         # Set Intel syntax
         self.CU.funcs.LLVMSetDisasmOptions(self.llvm_disasm, 4)
-        self.LLVMDisasmInstruction = self.CU.funcs.LLVMDisasmInstruction
-        self.strlen = self.CU.funcs.strlen
+        self.LLVMDisasmInstruction = self.CU.funcs.disasm
         self.tmpbuf = self.FFI.arrayType(self.FFI.CharTy, 256)()
 
     def __del__(self):
         self.CU.funcs.LLVMDisasmDispose(self.llvm_disasm)
 
     def disasm(self, data, addr):
-        size = self.LLVMDisasmInstruction(self.llvm_disasm, bytearray(data), len(data), addr, self.tmpbuf, len(self.tmpbuf)).value
-        outlen = self.strlen(self.tmpbuf).value
-        txt = bytes(self.tmpbuf)[:outlen].strip()
+        size = int(self.LLVMDisasmInstruction(self.llvm_disasm,
+            data, len(data), addr,
+            self.tmpbuf, len(self.tmpbuf)))
+        txt = bytes(self.tmpbuf).lstrip(b"\t")
+        txt = txt[:txt.index(b"\x00")]
         return txt.split(b"\t"), size
 
     def disasm_func(self, data, addr):
-        while True:
-            txt, instsize = self.disasm(data, addr)
+        view = memoryview(data)
+        while len(view) > 0:
+            txt, instsize = self.disasm(view, addr)
             if instsize == 0:
                 break
-            yield Instr(addr, txt, data[:instsize])
+            yield Instr(addr, txt, bytes(data[:instsize]))
             addr += instsize
-            data = data[instsize:]
+            view = view[instsize:]
 
     def disasm_binary(self, lief_bin):
         for f in lief_bin.functions:
-            yield from self.disasm_func(lief_bin.get_content_from_virtual_address(f.address, f.size), f.address)
+            data = lief_bin.get_content_from_virtual_address(f.address, f.size)
+            yield from self.disasm_func(bytes(data), f.address)
+
+if __name__ == "__main__":
+    import sys
+    import lief
+    llvm_root, Bin = sys.argv[1:]
+    Bin = lief.parse(Bin)
+    D = LLVMDisasm(llvm_root)
+    for inst in D.disasm_binary(Bin):
+        print(inst.txt)

@@ -50,7 +50,9 @@ def get_gadget(all_instrs, idx, ninstrs):
 
 def emulate(bin_, gadget, status):
     first,last = gadget[0],gadget[-1]
-    data = bytes(bin_.get_content_from_virtual_address(first.addr,last.addr-first.addr+len(last.raw)))
+    addr = first.addr
+    len_ = last.addr-first.addr+len(last.raw)
+    data = bytes(bin_.get_content_from_virtual_address(addr,len_))
     return miasm_sym(data, first.addr, status)
 
 def filter_(IRDst, in_):
